@@ -1,0 +1,12 @@
+venv/
+.venv/
+__pycache__/
+.DS_Store
+corrected/
+venv/
+.venv/
+__pycache__/
+.DS_Store
+done/
+pending/
+ready to backup/

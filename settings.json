@@ -1,0 +1,24 @@
+{
+  "download": {
+    "link": "https://us02web.zoom.us/rec/play/TtEOcHkd77eNOz8Gw_Zi9-UanXQ902jOiMA0R2h5a_zeOI-N7sCUgndyJI1myjMHmMzBISJQCbdKMGtl.73-rhKLpcEAUuua6",
+    "repo": "/Users/P3080463/Desktop/scripts/video_to_text_py/pending",
+    "naming_mode": "custom",
+    "custom_name": "20261014 - M4"
+  },
+  "transcribe": {
+    "folder": "/Users/P3080463/Desktop/scripts/video_to_text_py/pending",
+    "selected_file": "-- All files in this folder --",
+    "outdir": "/Users/P3080463/Desktop/scripts/video_to_text_py/done",
+    "lang": "es",
+    "translate": false,
+    "model": "medium",
+    "format": "vtt",
+    "speakers": "main",
+    "hf_token": ""
+  },
+  "correct": {
+    "folder": "/Users/P3080463/Desktop/scripts/video_to_text_py/corrected",
+    "selected_file": "-- All files in this folder --",
+    "outdir": "/Users/P3080463/Desktop/scripts/video_to_text_py/corrected"
+  }
+}
