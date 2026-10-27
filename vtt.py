@@ -16,13 +16,18 @@ import glob
 import os
 import re
 import sys
+import time
 import tqdm
+
+# Let PyTorch run any op the Apple GPU (MPS) doesn't support on the CPU instead of erroring.
+# Must be set before torch is imported; needed now that speaker diarization also runs on MPS.
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 import torch
 import whisper
 
 import speaker_filter
 
-__version__ = "1.5.0"
+__version__ = "1.5.1"
 
 _TRUST_STORE_TRIED = False
 
@@ -203,12 +208,15 @@ def process_file(media_path, model, options, outdir, formats, log=print, output_
     if progress_callback and use_speakers:
         transcribe_progress = lambda f: progress_callback(0.8 * f)
 
+    t0 = time.time()
     with _whisper_progress(transcribe_progress):
         result = model.transcribe(media_path, **options)
+    log(f"--> Transcription took {speaker_filter._fmt_secs(time.time() - t0)}")
 
     segments = result["segments"]
     full_text = result["text"].strip()
     if use_speakers:
+        release_gpu_memory()  # free Whisper's cached GPU memory before diarization uses the GPU too
         diar_progress = (lambda f: progress_callback(0.8 + 0.2 * f)) if progress_callback else None
         turns = speaker_filter.diarize(diarization_pipeline, media_path, log=log, progress_callback=diar_progress)
         segments = speaker_filter.filter_segments(segments, turns, speaker_mode, log=log)

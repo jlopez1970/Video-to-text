@@ -25,7 +25,7 @@ you only need it if you turn this option on.
 VERSIONING: own __version__, independent of the other files (see version.py).
 """
 
-__version__ = "1.0.1"
+__version__ = "1.1.0"
 
 # Hugging Face token used when none is given in the GUI/CLI (personal copy -- don't share this file).
 DEFAULT_HF_TOKEN = "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"
@@ -53,7 +53,7 @@ def load_pipeline(hf_token=None, log=print):
     import os
     token = (hf_token or "").strip() or os.environ.get("HF_TOKEN") or DEFAULT_HF_TOKEN or None
 
-    log(f"Loading speaker-diarization model '{DIARIZATION_MODEL}' (CPU)...")
+    log(f"Loading speaker-diarization model '{DIARIZATION_MODEL}'...")
     try:
         try:
             pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL, token=token)
@@ -72,9 +72,28 @@ def load_pipeline(hf_token=None, log=print):
             "The speaker-diarization model didn't load -- usually a missing/invalid Hugging Face token "
             f"or the conditions at https://huggingface.co/{DIARIZATION_MODEL} not accepted yet."
         )
-    # Deliberately left on CPU: pyannote on Apple's MPS backend has a history of unsupported-op
-    # errors, and diarization is a much lighter job than Whisper's transcription anyway.
+    # 1.1.0: run on the Apple Silicon GPU (MPS) when available. On CPU, diarizing a 2-3 hour
+    # class recording took far longer than Whisper itself (the speaker-embedding step runs over
+    # the whole file), which made the speaker filter ~50x slower overall. If MPS hits an
+    # unsupported op, diarize() retries that file on CPU automatically.
+    _move_pipeline(pipeline, _best_device(), log)
     return pipeline
+
+
+def _best_device():
+    import torch
+    return "mps" if torch.backends.mps.is_available() else "cpu"
+
+
+def _move_pipeline(pipeline, device, log=print):
+    import torch
+    try:
+        pipeline.to(torch.device(device))
+        pipeline._vtt_device = device
+        log(f"--> Speaker diarization will run on {device.upper()}")
+    except Exception as e:
+        pipeline._vtt_device = "cpu"
+        log(f"--> Could not move diarization to {device.upper()} ({e}); using CPU")
 
 
 class _Hook:
@@ -103,7 +122,19 @@ def diarize(pipeline, media_path, log=print, progress_callback=None):
     audio = whisper.load_audio(media_path)  # float32 numpy array, 16 kHz mono
     waveform = torch.from_numpy(audio).unsqueeze(0)  # shape (1, samples)
 
-    output = pipeline({"waveform": waveform, "sample_rate": SAMPLE_RATE}, hook=_Hook(progress_callback))
+    import time
+    t0 = time.time()
+    try:
+        output = pipeline({"waveform": waveform, "sample_rate": SAMPLE_RATE}, hook=_Hook(progress_callback))
+    except Exception as e:
+        if getattr(pipeline, "_vtt_device", "cpu") == "cpu":
+            raise
+        log(f"--> Diarization failed on {pipeline._vtt_device.upper()} ({e}); retrying on CPU (slower)...")
+        _move_pipeline(pipeline, "cpu", log)
+        t0 = time.time()
+        output = pipeline({"waveform": waveform, "sample_rate": SAMPLE_RATE}, hook=_Hook(progress_callback))
+    log(f"--> Diarization took {_fmt_secs(time.time() - t0)} "
+        f"(audio length {_fmt_secs(len(audio) / SAMPLE_RATE)})")
 
     # pyannote 4.x returns an object with .exclusive_speaker_diarization (no overlapping turns --
     # best for assigning one speaker per segment) and .speaker_diarization; 3.x returns the
@@ -120,6 +151,11 @@ def diarize(pipeline, media_path, log=print, progress_callback=None):
     turns = [(float(turn.start), float(turn.end), str(speaker)) for turn, speaker in items]
     turns.sort()
     return turns
+
+
+def _fmt_secs(sec):
+    sec = int(round(sec))
+    return f"{sec // 3600}h{sec % 3600 // 60:02d}m{sec % 60:02d}s"
 
 
 def speaker_durations(turns):

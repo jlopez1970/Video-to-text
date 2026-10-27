@@ -21,14 +21,22 @@ before this file was repurposed -- it needed no change.
 CURRENT VERSIONS (as of 2026-10-19)
 ------------------------------------------------------------------------
 gui.py                   1.5.0
-vtt.py                   1.5.0
-speaker_filter.py        1.0.1  (built-in default HF token, 2026-10-19)
+vtt.py                   1.5.1
+speaker_filter.py        1.1.0  (diarization on MPS, 2026-10-27)
 transcript_corrector.py  1.4.5
 correctionglossary.md    1.5    (versioned separately -- see that file's own header)
 
 ------------------------------------------------------------------------
 CHANGELOG
 ------------------------------------------------------------------------
+2026-10-27 -- speaker_filter.py 1.0.1 -> 1.1.0, vtt.py 1.5.0 -> 1.5.1:
+  - Fix: "Main narrator only" made transcription ~50x slower. Cause: pyannote diarization
+    was pinned to CPU, and on 2-3 hour recordings it took far longer than Whisper itself.
+    Diarization now runs on the Apple Silicon GPU (MPS), with automatic CPU retry if MPS
+    fails. vtt.py sets PYTORCH_ENABLE_MPS_FALLBACK=1 before importing torch, frees Whisper's
+    GPU cache before diarizing, and the log now shows how long transcription and
+    diarization each took.
+
 2026-10-19 -- gui.py 1.4.3 -> 1.5.0, vtt.py 1.4.2 -> 1.5.0, NEW speaker_filter.py 1.0.0:
   optional "main narrator only" filter, per user request (make the transcriber ignore
   voices other than the main narrator).

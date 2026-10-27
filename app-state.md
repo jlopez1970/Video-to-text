@@ -124,6 +124,16 @@ recordings. PDF was considered and intentionally left out (see changelog).
 single shared `version.py`-imported number this section used to describe): a change to one
 file no longer forces the others to bump. Current versions:
 
+**2026-10-27 — speaker filter ~50x slowdown fixed (untested on the Mac)** (`speaker_filter.py`
+1.0.1 -> 1.1.0, `vtt.py` 1.5.0 -> 1.5.1). User reported "Main narrator only" made the process
+~50x slower. Cause: pyannote diarization was hard-pinned to CPU; on 2-3 hour class recordings
+(1.7-2.9 GB MP4s) the CPU embedding step dwarfs Whisper's MPS transcription. Fix: pipeline moved
+to MPS when available (`pipeline.to(...)`), automatic per-file retry on CPU if MPS errors;
+`vtt.py` sets `PYTORCH_ENABLE_MPS_FALLBACK=1` before `import torch`, frees Whisper's GPU cache
+before diarizing, and logs "Transcription took ..." / "Diarization took ... (audio length ...)".
+Stub-tested (MPS success + MPS-failure->CPU retry). torch 2.13 was NOT changed by the pyannote
+install (dist-info dates), so Whisper itself is still on MPS. Not committed to git.
+
 | File | Version |
 |---|---|
 | `gui.py` | **1.4.3** |
@@ -552,3 +562,21 @@ User asked for a way to make the transcriber ignore voices other than the main n
 - Verified in the cloud with stubbed torch/whisper/pyannote (3 modes, TXT+VTT, progress, bad
   token). NOT yet confirmed with the real model on the Mac; pyannote.audio not yet installed
   in the venv (needs Python 3.14 compatibility check on install).
+
+---
+
+## 2026-10-19 (later) -- speaker_filter.py 1.0.0 -> 1.0.1: built-in default HF token
+
+- `speaker_filter.py` gained `DEFAULT_HF_TOKEN` (personal Hugging Face token hard-coded in the
+  file). Token lookup order in `load_pipeline()`: GUI/CLI value -> `HF_TOKEN` env var ->
+  `DEFAULT_HF_TOKEN`. So the HF token field can now be left blank.
+- `version.py` table updated to 1.0.1 (its changelog has no separate 1.0.1 entry).
+- Folder is now a git repo (one commit, "Initial commit"); `.gitignore` excludes venv,
+  __pycache__, .DS_Store, corrected/, done/, pending/, "ready to backup/".
+  `requirements.txt` added (2026-10-19 22:12).
+- **Caution:** `speaker_filter.py` (with the token) is committed to git -- don't push the repo
+  to a public remote without removing/rotating the token first.
+- Recorded 2026-10-21 after a version check (files on disk = source of truth).
+
+### Current versions (2026-10-21)
+gui.py 1.5.0 | vtt.py 1.5.0 | speaker_filter.py 1.0.1 | transcript_corrector.py 1.4.5 | correctionglossary.md 1.5
