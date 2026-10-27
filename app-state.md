@@ -25,8 +25,12 @@ recordings. PDF was considered and intentionally left out (see changelog).
   - `download_video(url, repo_dir)` — downloads via yt-dlp into repository A.
   - `resolve_media_files(input_path, repo_dir)` — figures out which file(s) to transcribe
     (download a URL, list a directory, or use a single file).
-  - `prepare_model(model_name, lang, translate)` — loads Whisper, picks MPS (Apple Silicon
-    GPU) or CPU.
+  - `prepare_model(model_name, lang, translate, engine="auto")` — loads Whisper. Since
+    vtt.py 1.6.0 (2026-10-27): engine "mlx" (mlx-whisper, Apple MLX), "torch"
+    (openai-whisper on MPS/CPU), or "auto" (MLX if installed, else torch; falls back to
+    torch if MLX can't start or fails on a file). CLI `-e/--engine`; GUI always uses auto.
+    Motivation: on a 4h class (medium, main narrator) transcription took 39m vs diarization
+    13m, so Whisper is the bottleneck. Not yet confirmed on the Mac.
   - `process_file(media_path, model, options, outdir, formats)` — transcribes one file,
     writes `.txt` and/or `.vtt` into folder B.
   - `run_job(...)` — orchestrates all of the above. Shared by both the CLI and the GUI so

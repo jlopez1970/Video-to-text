@@ -18,10 +18,10 @@ on the CLI. correctionglossary.md already carried its own independent version nu
 before this file was repurposed -- it needed no change.
 
 ------------------------------------------------------------------------
-CURRENT VERSIONS (as of 2026-10-19)
+CURRENT VERSIONS (as of 2026-10-27)
 ------------------------------------------------------------------------
 gui.py                   1.5.0
-vtt.py                   1.5.1
+vtt.py                   1.6.0  (MLX transcription engine, 2026-10-27)
 speaker_filter.py        1.1.0  (diarization on MPS, 2026-10-27)
 transcript_corrector.py  1.4.5
 correctionglossary.md    1.5    (versioned separately -- see that file's own header)
@@ -29,6 +29,22 @@ correctionglossary.md    1.5    (versioned separately -- see that file's own hea
 ------------------------------------------------------------------------
 CHANGELOG
 ------------------------------------------------------------------------
+2026-10-27 -- vtt.py 1.5.1 -> 1.6.0: MLX transcription engine.
+  - Measured on a 4h class (20261021 - M4, medium model, Main narrator only): transcription
+    39m21s, diarization 13m19s -- the speaker-filter fix worked, and Whisper is now ~75% of
+    the time. To speed up Whisper itself, vtt.py can now run it through Apple's MLX framework
+    (mlx-whisper; same Whisper models converted by mlx-community on Hugging Face, same
+    segments/VTT/TXT output, same tqdm progress hook).
+  - New engine option: "auto" (default: MLX if mlx-whisper is installed, else PyTorch),
+    "mlx", "torch". CLI: -e/--engine. The GUI has no new control -- it uses "auto".
+  - Safety nets: if MLX can't start (auto mode), the PyTorch engine is used; if MLX fails
+    on a file, that file is retried with PyTorch, which is then used for the rest of the job.
+  - Model mapping: tiny/base/small/medium -> mlx-community/whisper-<name>-mlx; "large" ->
+    whisper-large-v3-mlx (what openai-whisper's "large" means). First use downloads the
+    weights once (~1.5 GB for medium).
+  - requirements.txt: + mlx 0.32.4, mlx-metal 0.32.4, mlx-whisper 0.4.3 (cp314 wheels exist).
+  - NOT yet confirmed on the Mac (cloud side can't run MLX).
+
 2026-10-27 -- speaker_filter.py 1.0.1 -> 1.1.0, vtt.py 1.5.0 -> 1.5.1:
   - Fix: "Main narrator only" made transcription ~50x slower. Cause: pyannote diarization
     was pinned to CPU, and on 2-3 hour recordings it took far longer than Whisper itself.

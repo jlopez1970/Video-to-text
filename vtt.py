@@ -8,6 +8,11 @@ transcript_corrector.py's -- each file is versioned on its own schedule now, bum
 only when that specific file changes. See version.py for the current version of every
 component in one place and the combined changelog. Shown via `python vtt.py --version`
 on the CLI.
+
+TRANSCRIPTION ENGINES (1.6.0): "mlx" runs Whisper through Apple's MLX framework
+(pip install mlx-whisper) -- same models, same output format, typically several times
+faster on Apple Silicon than "torch" (openai-whisper on PyTorch/MPS). "auto" (default)
+uses MLX when it's installed and falls back to PyTorch otherwise, or if MLX errors.
 """
 import argparse
 import contextlib
@@ -27,7 +32,18 @@ import whisper
 
 import speaker_filter
 
-__version__ = "1.5.1"
+__version__ = "1.6.0"
+
+ENGINES = ("auto", "mlx", "torch")
+
+# openai-whisper model name -> MLX-converted weights on Hugging Face (mlx-community, public,
+# no token needed). Anything not listed maps to "mlx-community/whisper-<name>-mlx"
+# (tiny, base, small, medium, their .en variants, large-v1/v2/v3).
+_MLX_REPOS = {
+    "large": "mlx-community/whisper-large-v3-mlx",  # openai-whisper's "large" means large-v3
+    "turbo": "mlx-community/whisper-large-v3-turbo",
+    "large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
+}
 
 _TRUST_STORE_TRIED = False
 
@@ -103,6 +119,87 @@ def _whisper_progress(callback):
     finally:
         tqdm.tqdm = original_tqdm_class
         _ProgressTqdm._progress_callback = None
+
+
+def mlx_repo_for(model_name):
+    return _MLX_REPOS.get(model_name, f"mlx-community/whisper-{model_name}-mlx")
+
+
+def mlx_available():
+    """True on Apple Silicon macOS with mlx-whisper installed in this venv."""
+    import platform
+    if sys.platform != "darwin" or platform.machine() != "arm64":
+        return False
+    try:
+        import mlx_whisper  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _clear_mlx_cache():
+    """Returns MLX's cached GPU buffers to the system (no-op if MLX was never loaded)."""
+    if "mlx.core" not in sys.modules:
+        return
+    import mlx.core as mx
+    for fn in (getattr(mx, "clear_cache", None), getattr(getattr(mx, "metal", None), "clear_cache", None)):
+        if fn:
+            try:
+                fn()
+                return
+            except Exception:
+                pass
+
+
+class MlxWhisperModel:
+    """Wraps mlx-whisper so it looks like an openai-whisper model to the rest of this file:
+    process_file() only ever calls model.transcribe(path, **options), and mlx_whisper.transcribe
+    takes the same options (language, task, verbose) and returns the same dict (text, segments
+    with start/end/text). Its internal progress bar is the same tqdm.tqdm call as
+    openai-whisper's, so _whisper_progress() hooks it unchanged.
+
+    If MLX fails on a file, that file is retried with the PyTorch engine, which is then used
+    for the rest of the job."""
+
+    engine = "mlx"
+
+    def __init__(self, model_name, log=print):
+        import mlx.core as mx
+        import mlx_whisper
+        from mlx_whisper.transcribe import ModelHolder
+
+        self._mlx_whisper = mlx_whisper
+        self.model_name = model_name
+        self.repo = mlx_repo_for(model_name)
+        self.log = log
+        self._fallback = None
+
+        log(f"Loading Whisper model '{model_name}' via MLX ({self.repo})... "
+            f"(first use downloads it once)")
+        # Load now, so a bad model name or a download problem shows up before any work starts.
+        ModelHolder.get_model(self.repo, mx.float16)
+
+    def transcribe(self, media_path, **options):
+        if self._fallback is not None:
+            return self._fallback.transcribe(media_path, **options)
+        try:
+            return self._mlx_whisper.transcribe(media_path, path_or_hf_repo=self.repo, **options)
+        except Exception as e:
+            self.log(f"--> MLX transcription failed ({e}); retrying this file with the PyTorch "
+                     f"engine (used for the rest of this job)...")
+            self.release()
+            self._fallback = _load_torch_model(self.model_name, self.log)
+            return self._fallback.transcribe(media_path, **options)
+
+    def release(self):
+        try:
+            from mlx_whisper.transcribe import ModelHolder
+            ModelHolder.model = None
+            ModelHolder.model_path = None
+        except Exception:
+            pass
+        gc.collect()
+        _clear_mlx_cache()
 
 
 def download_video(url, repo_dir, log=print, custom_name=None):
@@ -272,14 +369,13 @@ def release_gpu_memory(log=None):
             torch.mps.empty_cache()
         except Exception:
             pass
+    _clear_mlx_cache()
     if log:
         log("--> Released GPU memory cache.")
 
 
-def prepare_model(model_name, lang, translate, log=print):
-    """Loads the Whisper model (using Apple Silicon GPU when available) and builds the transcribe options."""
-    enable_system_trust_store(log)  # first-time model download also goes over HTTPS
-
+def _load_torch_model(model_name, log=print):
+    """Loads the openai-whisper (PyTorch) model on the Apple Silicon GPU (MPS) when available."""
     if torch.backends.mps.is_available():
         device = "mps"
         log("--> Hardware Acceleration Enabled: Using Apple Silicon M3 GPU (MPS)")
@@ -295,7 +391,37 @@ def prepare_model(model_name, lang, translate, log=print):
             "accuracy tradeoff.")
 
     log(f"Loading Whisper model '{model_name}' on {device.upper()}...")
-    model = whisper.load_model(model_name, device=device)
+    return whisper.load_model(model_name, device=device)
+
+
+def prepare_model(model_name, lang, translate, log=print, engine="auto"):
+    """Loads the Whisper model with the chosen engine (see ENGINES / module docstring) and
+    builds the transcribe options. engine="auto": MLX if installed, else PyTorch; if MLX can't
+    start, falls back to PyTorch with a log note. engine="mlx" raises instead of falling back."""
+    enable_system_trust_store(log)  # first-time model download also goes over HTTPS
+
+    engine = (engine or "auto").lower()
+    if engine not in ENGINES:
+        raise ValueError(f"Unknown engine '{engine}' (use one of: {', '.join(ENGINES)})")
+    if engine == "mlx" and not mlx_available():
+        raise RuntimeError("The MLX engine needs Apple Silicon and mlx-whisper. In the app's venv run:\n"
+                           "    pip install mlx-whisper")
+
+    model = None
+    if engine == "mlx" or (engine == "auto" and mlx_available()):
+        log("--> Transcription engine: MLX (Apple Silicon GPU)")
+        try:
+            model = MlxWhisperModel(model_name, log=log)
+        except Exception as e:
+            if engine == "mlx":
+                raise RuntimeError(f"Could not start the MLX engine: {e}")
+            log(f"--> Could not start the MLX engine ({e}); using the PyTorch engine instead.")
+    elif engine == "auto":
+        log("--> Tip: `pip install mlx-whisper` in the app's venv for much faster transcription.")
+
+    if model is None:
+        log("--> Transcription engine: PyTorch (openai-whisper)")
+        model = _load_torch_model(model_name, log=log)
 
     # verbose=False (rather than Whisper's default of None) turns ON its internal progress
     # bar instead of leaving it disabled -- _whisper_progress/_ProgressTqdm above hook into
@@ -311,7 +437,8 @@ def prepare_model(model_name, lang, translate, log=print):
 
 
 def run_job(input_path, repo_dir, outdir, model_name, lang, translate, formats, log=print,
-            download_name=None, output_name=None, progress_callback=None, speaker_mode="off", hf_token=None):
+            download_name=None, output_name=None, progress_callback=None, speaker_mode="off", hf_token=None,
+            engine="auto"):
     """High-level orchestration shared by the CLI and the GUI: resolve input, load the model,
     transcribe every file, and write output into folder B.
 
@@ -325,7 +452,8 @@ def run_job(input_path, repo_dir, outdir, model_name, lang, translate, formats, 
     a background thread and hops back to the main thread via a Queue, same as \`log\`).
     speaker_mode / hf_token: optional main-narrator filtering, see process_file() and
     speaker_filter.py. The diarization model is loaded once per job, before any transcription,
-    so a setup problem (missing package/token) fails fast instead of after a long transcribe."""
+    so a setup problem (missing package/token) fails fast instead of after a long transcribe.
+    engine: "auto" (default) / "mlx" / "torch" -- see prepare_model()."""
     media_files = resolve_media_files(input_path, repo_dir, log=log, download_name=download_name)
     os.makedirs(outdir, exist_ok=True)
 
@@ -337,7 +465,7 @@ def run_job(input_path, repo_dir, outdir, model_name, lang, translate, formats, 
     else:
         speaker_mode = "off"
 
-    model, options = prepare_model(model_name, lang, translate, log=log)
+    model, options = prepare_model(model_name, lang, translate, log=log, engine=engine)
 
     effective_output_name = None
     if output_name:
@@ -369,6 +497,8 @@ def run_job(input_path, repo_dir, outdir, model_name, lang, translate, formats, 
 
     # Drop the model and release its memory now that the job is done, so the app's memory
     # footprint doesn't stay high (or keep climbing across separate Transcribe runs) once idle.
+    if hasattr(model, "release"):
+        model.release()  # MLX keeps its model in a module-level cache; drop it explicitly
     del model
     diarization_pipeline = None
     release_gpu_memory(log=log)
@@ -422,6 +552,12 @@ def main():
     )
 
     parser.add_argument(
+        "-e", "--engine", default="auto", choices=list(ENGINES),
+        help="Transcription engine: 'auto' (default) = MLX if mlx-whisper is installed, else PyTorch; "
+             "'mlx' = Apple MLX (fastest on Apple Silicon); 'torch' = openai-whisper on PyTorch/MPS."
+    )
+
+    parser.add_argument(
         "--no-check-certificate", action="store_true",
         help="Turn OFF SSL certificate checking for the download (last resort behind a HTTPS-inspecting proxy; "
              "prefer `pip install truststore`)."
@@ -437,7 +573,7 @@ def main():
     try:
         run_job(args.input, args.repo, args.outdir, args.model, args.lang, args.translate, formats,
                 download_name=args.download_name, output_name=args.output_name,
-                speaker_mode=args.speakers, hf_token=args.hf_token)
+                speaker_mode=args.speakers, hf_token=args.hf_token, engine=args.engine)
     except Exception as e:
         # Catches our own FileNotFoundError/RuntimeError as well as anything yt-dlp or
         # Whisper might raise (e.g. yt_dlp.utils.DownloadError), so failures print cleanly
