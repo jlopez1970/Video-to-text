@@ -32,7 +32,7 @@ import whisper
 
 import speaker_filter
 
-__version__ = "1.6.0"
+__version__ = "1.6.1"
 
 ENGINES = ("auto", "mlx", "torch")
 
@@ -427,7 +427,11 @@ def prepare_model(model_name, lang, translate, log=print, engine="auto"):
     # bar instead of leaving it disabled -- _whisper_progress/_ProgressTqdm above hook into
     # exactly that bar to report real progress. It does NOT print per-segment text (that's
     # verbose=True); it only adds one harmless "Detected language: ..." print when lang=auto.
-    options = {"verbose": False}
+    # condition_on_previous_text=False (1.6.1): with Whisper's default (True), each segment is
+    # decoded with the previous segment's text as its prompt, so one bad segment can seed a
+    # repetition loop -- on a 4h class this produced "y el outlook" x308 (~10 min of lecture
+    # lost) plus 113 empty cues. Applies to both engines (MLX and the PyTorch fallback).
+    options = {"verbose": False, "condition_on_previous_text": False}
     if lang.lower() != "auto":
         options["language"] = lang
     if translate:

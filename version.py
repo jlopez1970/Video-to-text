@@ -21,7 +21,7 @@ before this file was repurposed -- it needed no change.
 CURRENT VERSIONS (as of 2026-10-27)
 ------------------------------------------------------------------------
 gui.py                   1.5.0
-vtt.py                   1.6.0  (MLX transcription engine, 2026-10-27)
+vtt.py                   1.6.1  (repetition-loop fix, 2026-10-27)
 speaker_filter.py        1.1.0  (diarization on MPS, 2026-10-27)
 transcript_corrector.py  1.4.5
 correctionglossary.md    1.5    (versioned separately -- see that file's own header)
@@ -29,6 +29,22 @@ correctionglossary.md    1.5    (versioned separately -- see that file's own hea
 ------------------------------------------------------------------------
 CHANGELOG
 ------------------------------------------------------------------------
+2026-10-27 -- vtt.py 1.6.0 -> 1.6.1: stopped Whisper repetition loops.
+  - Symptom: the first MLX run on the 4h class "20261021 - M4" looped "y el outlook" 308
+    times (47:18-57:36, ~10 min of lecture lost) and wrote 113 empty cues. The older
+    PyTorch output of the same class didn't loop there, but lost ~40 s at 3:44:20-3:45:00.
+  - Cause: prepare_model() passed only verbose/language/task, so condition_on_previous_text
+    stayed at Whisper's default (True): each segment is decoded with the previous one's text
+    as its prompt, and one bad segment can seed a loop that sustains itself.
+  - Fix: options now set condition_on_previous_text=False. Both engines share `options`, so
+    this covers MLX and the PyTorch fallback.
+  - Confirmed on the Mac (M4 re-run with MLX): 0 loop repeats, 0 empty cues, both problem
+    passages transcribed, natural cue timing (33 fixed 2.0 s cues vs 731 before).
+  - Side effects: some stretches switch to sentence case / "?...?" punctuation and spell out
+    numbers ("treinta y ocho"); 17 "."-only cues in a silent stretch (3:43:53-3:44:16).
+    Cosmetic. Possible follow-up: skip cues with no letters/digits when writing the VTT.
+  - This also confirms the 1.6.0 MLX engine on the Mac (previously "NOT yet confirmed").
+
 2026-10-27 -- vtt.py 1.5.1 -> 1.6.0: MLX transcription engine.
   - Measured on a 4h class (20261021 - M4, medium model, Main narrator only): transcription
     39m21s, diarization 13m19s -- the speaker-filter fix worked, and Whisper is now ~75% of

@@ -30,7 +30,11 @@ recordings. PDF was considered and intentionally left out (see changelog).
     (openai-whisper on MPS/CPU), or "auto" (MLX if installed, else torch; falls back to
     torch if MLX can't start or fails on a file). CLI `-e/--engine`; GUI always uses auto.
     Motivation: on a 4h class (medium, main narrator) transcription took 39m vs diarization
-    13m, so Whisper is the bottleneck. Not yet confirmed on the Mac.
+    13m, so Whisper is the bottleneck. Confirmed working on the Mac 2026-10-27.
+    Since vtt.py 1.6.1 (2026-10-27): options set `condition_on_previous_text=False` (both
+    engines) -- the default (True) let one bad segment seed a repetition loop ("y el
+    outlook" x308, ~10 min lost + 113 empty cues on the 4h M4 class). Confirmed fixed on a
+    re-run. Follow-up: skip VTT cues with no letters/digits (17 "."-only cues remained).
   - `process_file(media_path, model, options, outdir, formats)` — transcribes one file,
     writes `.txt` and/or `.vtt` into folder B.
   - `run_job(...)` — orchestrates all of the above. Shared by both the CLI and the GUI so
